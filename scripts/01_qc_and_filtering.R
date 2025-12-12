@@ -1,5 +1,6 @@
 ## --- 01_qc_and_filtering.R ---
-## Goal: QC and standardize Smajic, Martirosyan, and Kamath datasets individually.
+## Goal: QC and standardize Smajic, Martirosyan, and Kamath datasets individually
+## Goal: QC and standardize Zhang dataset individually 
 ## Note: All file paths use here::here() and assume files are correctly placed in a 'data/raw' folder.
 
 # 0. SETUP
@@ -516,5 +517,141 @@ message("Kamath dataset processed and saved to 'data/processed/kamath_clean.rds'
 rm(kamath, plot_qc_kamath)
 gc()
 
-message("--- SCRIPT 01 COMPLETE: All 3 datasets processed! ---")
 
+
+# ==========================================================================
+# DATASET 4: ZHANG (GSE202210) - Prefrontal Cortex
+# ==========================================================================
+message("--- Starting Zhang (GSE202210) Dataset Processing ---")
+
+# A. Load Data 
+# --------------------------------------------------------------------------
+
+zhang_data_dir <- here("data", "raw", "GSE202210_Zhang", "GSE202210_RAW")
+
+# 1. List all matrix files
+matrix_files <- list.files(zhang_data_dir, pattern = "_matrix\\.mtx\\.gz$", full.names = TRUE)
+
+if (length(matrix_files) == 0) {
+  stop("No matrix files found in: ", zhang_data_dir, ". Check folder structure.")
+}
+
+# Extract unique sample prefixes (e.g., "GSM6106340_HSDG07HC")
+prefixes <- sub("_matrix\\.mtx\\.gz$", "", basename(matrix_files))
+
+message(paste("Found", length(prefixes), "samples. Loading matrices..."))
+
+# 2. Loop through files and read them into a list
+expr_list <- lapply(prefixes, function(pref) {
+  
+  # Define paths for this specific sample
+  mat_path <- file.path(zhang_data_dir, paste0(pref, "_matrix.mtx.gz"))
+  gene_path <- file.path(zhang_data_dir, paste0(pref, "_genes.tsv.gz"))
+  bar_path <- file.path(zhang_data_dir, paste0(pref, "_barcodes.tsv.gz"))
+  
+  # Read files
+  if (!file.exists(mat_path) || !file.exists(gene_path) || !file.exists(bar_path)) {
+    warning(paste("Skipping missing sample files for:", pref))
+    return(NULL)
+  }
+  
+  m <- Matrix::readMM(mat_path)
+  g <- read.delim(gene_path, header = FALSE, stringsAsFactors = FALSE)
+  b <- readLines(bar_path)
+  
+  # Assign names
+  # Using V2 (Symbol) for rownames. verify uniqueness.
+  rownames(m) <- make.unique(g$V2)
+  # Prepend prefix to barcodes to ensure they are unique when combined
+  colnames(m) <- paste0(pref, "_", b)
+  
+  return(as(m, "dgCMatrix"))
+})
+
+# Remove any NULLs if files were missing
+expr_list <- expr_list[!sapply(expr_list, is.null)]
+
+# 3. Combine into one large matrix
+message("Combining samples into one matrix...")
+expr_all <- do.call(cbind, expr_list)
+
+# Clean up memory
+rm(expr_list)
+gc()
+
+# B. Create Seurat Object & Parse Metadata from Filenames
+# --------------------------------------------------------------------------
+message("Creating Zhang Seurat Object...")
+
+zhang <- CreateSeuratObject(
+  counts    = expr_all,
+  project   = "Zhang_PFC",
+  min.cells = 3,
+  min.features = 200
+)
+
+# Free memory of the large raw matrix
+rm(expr_all)
+gc()
+
+# --- METADATA PARSING ---
+# Format expected: "GSM610634X_HSDG07HC_..." or similar
+
+message("Parsing metadata from filenames...")
+
+# 1. Extract the sample name part (e.g., GSM6106340_HSDG07HC)
+zhang$full_id <- stringr::str_extract(colnames(zhang), "^.*(?=_[ACGT]+(-1)?$)")
+
+# 2. Extract Diagnosis
+zhang$Diagnosis_Tag <- stringr::str_extract(zhang$full_id, "(HC|PD)$")
+
+zhang$Diagnosis <- case_when(
+  zhang$Diagnosis_Tag == "HC" ~ "NC", # Standardize Control
+  zhang$Diagnosis_Tag == "PD" ~ "PD", # Standardize Patient
+  TRUE ~ "Other"
+)
+
+# 3. Extract ID
+temp_id <- stringr::str_remove(zhang$full_id, "^[^_]+_")
+zhang$ID <- stringr::str_remove(temp_id, "(HC|PD)$")
+
+zhang$dataset_source <- "Zhang"
+
+# Check the parsing
+message("Metadata check (First 5 IDs and Diagnosis):")
+print(head(unique(data.frame(Raw=zhang$full_id, ID=zhang$ID, Diagnosis=zhang$Diagnosis)), 5))
+
+# C. QC and Filtering
+# --------------------------------------------------------------------------
+zhang[["percent.mt"]] <- PercentageFeatureSet(zhang, pattern = "^MT-")
+
+message("Generating QC Violin Plots (pre-filter)...")
+plot_qc_zhang <- VlnPlot(zhang, 
+                         features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+                         ncol = 3, 
+                         group.by = "Diagnosis", 
+                         pt.size = 0)
+
+ggsave(here("results", "figures", "qc_zhang_prefilter.png"), 
+       plot = plot_qc_zhang, 
+       width = 10, height = 5)
+
+# Filtering
+# Note: Using consistent thresholds with Smajic/Martirosyan/Kamath for harmonization.
+message(paste("Zhang cells before filtering:", ncol(zhang)))
+
+zhang <- subset(zhang, subset = nFeature_RNA > 200 & 
+                  nFeature_RNA < 3000 & 
+                  percent.mt < 15)
+
+message(paste("Zhang cells after filtering:", ncol(zhang)))
+
+# Save
+saveRDS(zhang, file = here("data", "processed", "zhang_clean.rds"))
+message("Zhang dataset processed and saved to 'data/processed/zhang_clean.rds'.")
+
+# Final Cleanup
+rm(zhang, plot_qc_zhang)
+gc()
+
+message("--- SCRIPT 01 COMPLETE! ---")
