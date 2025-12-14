@@ -1,28 +1,15 @@
-# --- RStudio & R System Files ---
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
-.DS_Store
-Thumbs.db
 
-# --- Large Data & Results ---
-# Ignore the entire data directory to prevent accidental upload of large datasets
+# Exclude all data and result files to save space.
+# Raw data stays on the shared drive/server.
 data/
-# Ignore the results directory so you don't track every single test plot
 results/
 
-# --- Environment Management ---
-# If you use renv, we want to keep renv.lock but ignore the library itself
+# Exclude renv library (but keep renv.lock)
 renv/library/
-renv/python/
 renv/staging/
-
-# --- Safety Net for Loose Files ---
-# Catch-all for large files if you accidentally save them outside the data folder
-*.zip
-*.tar.gz
-*.csv
-*.rds
-*.h5ad
-*.h5
+renv/python/
+renv/activate.R
